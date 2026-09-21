@@ -1,0 +1,1 @@
+[{"question":"What is the main purpose?","relevant_sources":["sample_enterprise_policy.txt"],"expected_answer":"Grounded enterprise knowledge answers."},{"question":"What stack is used?","relevant_sources":["sample_architecture.txt"],"expected_answer":"FastAPI, React, PostgreSQL/pgvector, BM25, reranker and LLM."}]
