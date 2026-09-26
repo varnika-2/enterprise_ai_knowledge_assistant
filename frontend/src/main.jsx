@@ -4,173 +4,265 @@ import './style.css';
 
 const API = 'http://localhost:8000';
 
+
+/* =========================================================
+   AUTOMATIC LOGIN
+   ========================================================= */
+
+async function loginAndGetToken() {
+  const response = await fetch(API + '/auth/login', {
+    method: 'POST',
+
+    headers: {
+      'Content-Type': 'application/json'
+    },
+
+    body: JSON.stringify({
+      email: 'demo@example.com',
+      password: 'Demo@123'
+    })
+  });
+
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(
+      'Authentication server returned an invalid response'
+    );
+  }
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(
+      data.detail || 'Authentication failed'
+    );
+  }
+
+  localStorage.setItem(
+    'access_token',
+    data.access_token
+  );
+
+  return data.access_token;
+}
+
+
+/* =========================================================
+   AUTHENTICATED FETCH
+   ========================================================= */
+
+async function authenticatedFetch(
+  url,
+  options = {}
+) {
+  let currentToken =
+    localStorage.getItem('access_token') || '';
+
+  /*
+   * No token exists.
+   * Automatically log in.
+   */
+  if (!currentToken) {
+    currentToken =
+      await loginAndGetToken();
+  }
+
+  const firstHeaders = new Headers(
+    options.headers || {}
+  );
+
+  firstHeaders.set(
+    'Authorization',
+    'Bearer ' + currentToken
+  );
+
+  let response = await fetch(url, {
+    ...options,
+    headers: firstHeaders
+  });
+
+
+  /*
+   * Token expired / invalid.
+   *
+   * Get a fresh token and retry exactly once.
+   */
+  if (response.status === 401) {
+    console.log(
+      'JWT expired or invalid. Refreshing token...'
+    );
+
+    /*
+     * Remove the old token first.
+     */
+    localStorage.removeItem(
+      'access_token'
+    );
+
+    currentToken =
+      await loginAndGetToken();
+
+    const retryHeaders = new Headers(
+      options.headers || {}
+    );
+
+    retryHeaders.set(
+      'Authorization',
+      'Bearer ' + currentToken
+    );
+
+    response = await fetch(url, {
+      ...options,
+      headers: retryHeaders
+    });
+  }
+
+  return response;
+}
+
+
+/* =========================================================
+   MAIN APP
+   ========================================================= */
+
 function App() {
+
   const [token, setToken] = useState(
     localStorage.getItem('access_token') || ''
   );
 
-  const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState('');
-  const [sources, setSources] = useState([]);
-  const [file, setFile] = useState(null);
-  const [metrics, setMetrics] = useState(null);
-  const [status, setStatus] = useState('');
+  const [question, setQuestion] =
+    useState('');
 
-  // -------------------------
-  // Authentication
-  // -------------------------
+  const [answer, setAnswer] =
+    useState('');
+
+  const [sources, setSources] =
+    useState([]);
+
+  const [file, setFile] =
+    useState(null);
+
+  const [metrics, setMetrics] =
+    useState(null);
+
+  const [status, setStatus] =
+    useState('');
+
+
+  /* =======================================================
+     MANUAL LOGIN BUTTON
+     ======================================================= */
+
   async function login() {
-    console.log('LOGIN BUTTON CLICKED');
+    console.log(
+      'LOGIN BUTTON CLICKED'
+    );
 
     try {
-      setStatus('Signing in...');
-
-      const response = await fetch(API + '/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          email: 'demo@example.com',
-          password: 'Demo@123'
-        })
-      });
-
-      console.log('Login status:', response.status);
-
-      const data = await response.json();
-
-      console.log('Login response:', data);
-
-      if (!response.ok) {
-        setStatus(
-          '❌ Login error: ' +
-            (data.detail || 'Authentication failed')
-        );
-        return;
-      }
-
-      localStorage.setItem(
-        'access_token',
-        data.access_token
+      setStatus(
+        'Signing in...'
       );
 
-      setToken(data.access_token);
+      const newToken =
+        await loginAndGetToken();
+
+      setToken(newToken);
 
       setStatus(
         '✅ Authenticated as demo admin'
       );
 
     } catch (error) {
-      console.error('LOGIN FAILED:', error);
+      console.error(
+        'LOGIN FAILED:',
+        error
+      );
 
       setStatus(
-        '❌ Login failed: ' + error.message
+        '❌ Login failed: ' +
+        error.message
       );
     }
   }
 
-  // -------------------------
-  // Upload & Index
-  // -------------------------
+
+  /* =======================================================
+     UPLOAD & INDEX
+     ======================================================= */
+
   async function upload() {
-    console.log('UPLOAD BUTTON CLICKED');
-
-    const currentToken =
-      localStorage.getItem('access_token') || token;
-
-    console.log(
-      'Token exists:',
-      !!currentToken
-    );
-
-    console.log(
-      'Selected file:',
-      file
-    );
-
-    if (!currentToken) {
-      setStatus(
-        '❌ Please sign in first.'
-      );
-
-      console.error(
-        'UPLOAD STOPPED: No authentication token'
-      );
-
-      return;
-    }
 
     if (!file) {
       setStatus(
-        '❌ Please select a file first.'
-      );
-
-      console.error(
-        'UPLOAD STOPPED: No file selected'
+        '❌ Please select a document first.'
       );
 
       return;
     }
 
     try {
+
       setStatus(
-        '⏳ Uploading and indexing...'
+        'Uploading and indexing...'
       );
 
-      const formData = new FormData();
+      const formData =
+        new FormData();
 
       formData.append(
         'file',
         file
       );
 
-      console.log(
-        'Sending POST /documents/upload'
-      );
 
-      const response = await fetch(
-        API + '/documents/upload',
-        {
-          method: 'POST',
+      /*
+       * authenticatedFetch automatically:
+       *
+       * 1. Gets token if missing
+       * 2. Adds Authorization header
+       * 3. Refreshes token if 401
+       * 4. Retries the request
+       */
 
-          headers: {
-            Authorization:
-              'Bearer ' + currentToken
-          },
-
-          body: formData
-        }
-      );
-
-      console.log(
-        'Upload HTTP status:',
-        response.status
-      );
-
-      const data = await response.json();
-
-      console.log(
-        'Upload response:',
-        data
-      );
-
-      if (!response.ok) {
-        setStatus(
-          '❌ Upload error: ' +
-            (data.detail || 'Upload failed')
+      const response =
+        await authenticatedFetch(
+          API + '/documents/upload',
+          {
+            method: 'POST',
+            body: formData
+          }
         );
 
-        return;
+
+      let data;
+
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(
+          'Server returned an invalid response'
+        );
       }
+
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+          'Document upload failed'
+        );
+      }
+
 
       setStatus(
         '✅ Indexed ' +
-          (data.chunks || 0) +
-          ' chunks successfully'
+        data.chunks +
+        ' chunks'
       );
 
     } catch (error) {
+
       console.error(
         'UPLOAD FAILED:',
         error
@@ -178,29 +270,17 @@ function App() {
 
       setStatus(
         '❌ Upload failed: ' +
-          error.message
+        error.message
       );
     }
   }
 
-  // -------------------------
-  // Research Assistant
-  // -------------------------
+
+  /* =======================================================
+     ASK AI / CHAT
+     ======================================================= */
+
   async function ask() {
-    console.log(
-      'ASK AI BUTTON CLICKED'
-    );
-
-    const currentToken =
-      localStorage.getItem('access_token') || token;
-
-    if (!currentToken) {
-      setStatus(
-        '❌ Please sign in first.'
-      );
-
-      return;
-    }
 
     if (!question.trim()) {
       setStatus(
@@ -211,52 +291,49 @@ function App() {
     }
 
     try {
+
       setStatus(
-        '⏳ Retrieving documents...'
+        'Retrieving + reranking + generating...'
       );
 
-      const response = await fetch(
-        API + '/chat',
-        {
-          method: 'POST',
 
-          headers: {
-            'Content-Type':
-              'application/json',
+      const response =
+        await authenticatedFetch(
+          API + '/chat',
+          {
+            method: 'POST',
 
-            Authorization:
-              'Bearer ' + currentToken
-          },
+            headers: {
+              'Content-Type':
+                'application/json'
+            },
 
-          body: JSON.stringify({
-            question:
-              question.trim()
-          })
-        }
-      );
-
-      console.log(
-        'Chat HTTP status:',
-        response.status
-      );
-
-      const data =
-        await response.json();
-
-      console.log(
-        'Chat response:',
-        data
-      );
-
-      if (!response.ok) {
-        setStatus(
-          '❌ Chat error: ' +
-            (data.detail ||
-              'Chat request failed')
+            body: JSON.stringify({
+              question:
+                question.trim()
+            })
+          }
         );
 
-        return;
+
+      let data;
+
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(
+          'Server returned an invalid response'
+        );
       }
+
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+          'Chat request failed'
+        );
+      }
+
 
       setAnswer(
         data.answer || ''
@@ -266,17 +343,18 @@ function App() {
         data.sources || []
       );
 
+
       setStatus(
-        '✅ ' +
-          (data.intent || 'RAG') +
-          ' • ' +
-          (data.latency_ms ?? '—') +
-          ' ms • ' +
-          (data.token_usage ?? '—') +
-          ' tokens'
+        (data.intent || 'RAG') +
+        ' • ' +
+        (data.latency_ms ?? '-') +
+        ' ms • ' +
+        (data.token_usage ?? '-') +
+        ' tokens'
       );
 
     } catch (error) {
+
       console.error(
         'CHAT FAILED:',
         error
@@ -284,71 +362,52 @@ function App() {
 
       setStatus(
         '❌ Chat failed: ' +
-          error.message
+        error.message
       );
     }
   }
 
-  // -------------------------
-  // Evaluation Dashboard
-  // -------------------------
+
+  /* =======================================================
+     EVALUATION DASHBOARD
+     ======================================================= */
+
   async function refreshMetrics() {
-    console.log(
-      'EVALUATION REFRESH CLICKED'
-    );
-
-    const currentToken =
-      localStorage.getItem('access_token') || token;
-
-    if (!currentToken) {
-      setStatus(
-        '❌ Please sign in first.'
-      );
-
-      return;
-    }
 
     try {
+
       setStatus(
-        '⏳ Loading evaluation metrics...'
+        'Refreshing evaluation metrics...'
       );
 
+
       const response =
-        await fetch(
+        await authenticatedFetch(
           API + '/evaluation/summary',
           {
-            method: 'GET',
-
-            headers: {
-              Authorization:
-                'Bearer ' +
-                currentToken
-            }
+            method: 'GET'
           }
         );
 
-      console.log(
-        'Evaluation HTTP status:',
-        response.status
-      );
 
-      const data =
-        await response.json();
+      let data;
 
-      console.log(
-        'Evaluation response:',
-        data
-      );
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(
+          'Server returned an invalid response'
+        );
+      }
+
 
       if (!response.ok) {
-        setStatus(
-          '❌ Evaluation error: ' +
-            (data.detail ||
-              'Could not load metrics')
+        throw new Error(
+          data.detail ||
+          'Failed to load evaluation metrics'
         );
-
-        return;
       }
+
 
       setMetrics(data);
 
@@ -357,57 +416,29 @@ function App() {
       );
 
     } catch (error) {
+
       console.error(
-        'EVALUATION FAILED:',
+        'METRICS FAILED:',
         error
       );
 
       setStatus(
-        '❌ Evaluation failed: ' +
-          error.message
+        '❌ Metrics failed: ' +
+        error.message
       );
     }
   }
 
-  // -------------------------
-  // Logout
-  // -------------------------
-  function logout() {
-    localStorage.removeItem(
-      'access_token'
-    );
 
-    setToken('');
-    setAnswer('');
-    setSources([]);
-    setMetrics(null);
-    setQuestion('');
-    setFile(null);
+  /* =========================================================
+     UI
+     ========================================================= */
 
-    setStatus(
-      'Signed out'
-    );
-  }
-
-  const metricNames = [
-    'recall',
-    'precision',
-    'mrr',
-    'ndcg',
-    'faithfulness',
-    'answer_relevance',
-    'citation_accuracy',
-    'latency_ms',
-    'token_usage'
-  ];
-
-  // -------------------------
-  // UI
-  // -------------------------
   return (
     <main>
 
       <header>
+
         <div>
 
           <small>
@@ -419,8 +450,8 @@ function App() {
           </h1>
 
           <p>
-            Enterprise documents → hybrid retrieval →
-            reranking → grounded LLM answers.
+            Enterprise documents → hybrid retrieval
+            → reranking → grounded LLM answers.
           </p>
 
         </div>
@@ -428,10 +459,13 @@ function App() {
         <b>
           LOCAL DEMO
         </b>
+
       </header>
 
 
-      {/* Authentication + Upload */}
+      {/* =====================================================
+          AUTHENTICATION + UPLOAD
+          ===================================================== */}
 
       <div className="grid">
 
@@ -441,28 +475,14 @@ function App() {
             1. Authentication
           </h2>
 
-          {!token ? (
+          <button onClick={login}>
+            Sign in as demo admin
+          </button>
 
-            <button
-              onClick={login}
-            >
-              Sign in as demo admin
-            </button>
-
-          ) : (
-
-            <>
-              <p className="status">
-                ✅ Authenticated as demo admin
-              </p>
-
-              <button
-                onClick={logout}
-              >
-                Sign out
-              </button>
-            </>
-
+          {token && (
+            <p className="status">
+              ✅ Authentication token available
+            </p>
           )}
 
         </section>
@@ -476,44 +496,14 @@ function App() {
 
           <input
             type="file"
-            accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv"
-            onChange={(event) => {
-
-              const selectedFile =
-                event.target.files?.[0] ||
-                null;
-
-              console.log(
-                'FILE SELECTED:',
-                selectedFile
-              );
-
+            onChange={(e) =>
               setFile(
-                selectedFile
-              );
-
-              if (selectedFile) {
-                setStatus(
-                  '📄 Selected: ' +
-                    selectedFile.name
-                );
-              }
-
-            }}
+                e.target.files[0]
+              )
+            }
           />
 
-          {file && (
-            <p>
-              Selected file:{' '}
-              <strong>
-                {file.name}
-              </strong>
-            </p>
-          )}
-
-          <button
-            onClick={upload}
-          >
+          <button onClick={upload}>
             Upload & index
           </button>
 
@@ -522,7 +512,9 @@ function App() {
       </div>
 
 
-      {/* Research Assistant */}
+      {/* =====================================================
+          RESEARCH ASSISTANT
+          ===================================================== */}
 
       <section>
 
@@ -532,18 +524,15 @@ function App() {
 
         <textarea
           value={question}
-          onChange={(event) =>
+          onChange={(e) =>
             setQuestion(
-              event.target.value
+              e.target.value
             )
           }
           placeholder="Ask about your documents..."
         />
 
-        <button
-          onClick={ask}
-          disabled={!token}
-        >
+        <button onClick={ask}>
           Ask AI
         </button>
 
@@ -553,7 +542,6 @@ function App() {
 
 
         {answer && (
-
           <>
 
             <h3>
@@ -569,59 +557,45 @@ function App() {
               Citations
             </h3>
 
+            {sources.map(
+              (source, index) => (
 
-            {sources.length === 0 ? (
+                <div
+                  className="source"
+                  key={
+                    source.citation ||
+                    index
+                  }
+                >
 
-              <p>
-                No citations returned.
-              </p>
+                  <b>
+                    [
+                    {source.citation}
+                    ]
+                  </b>
 
-            ) : (
+                  {' '}
 
-              sources.map(
-                (source, index) => (
+                  {source.source}
 
-                  <div
-                    className="source"
-                    key={
-                      source.citation ||
-                      source.source ||
-                      index
-                    }
-                  >
+                  <span>
+                    {source.score}
+                  </span>
 
-                    <b>
-                      [
-                      {source.citation ||
-                        index + 1}
-                      ]
-                    </b>{' '}
+                </div>
 
-                    {source.source ||
-                      'Unknown source'}
-
-                    {' '}
-
-                    <span>
-                      {source.score ??
-                        ''}
-                    </span>
-
-                  </div>
-
-                )
               )
-
             )}
 
           </>
-
         )}
 
       </section>
 
 
-      {/* Evaluation */}
+      {/* =====================================================
+          EVALUATION DASHBOARD
+          ===================================================== */}
 
       <section>
 
@@ -632,10 +606,7 @@ function App() {
           </h2>
 
           <button
-            onClick={
-              refreshMetrics
-            }
-            disabled={!token}
+            onClick={refreshMetrics}
           >
             Refresh
           </button>
@@ -645,20 +616,31 @@ function App() {
 
         <div className="metrics">
 
-          {metricNames.map(
-            (name) => (
+          {[
+            'recall',
+            'precision',
+            'mrr',
+            'ndcg',
+            'faithfulness',
+            'answer_relevance',
+            'citation_accuracy',
+            'latency_ms',
+            'token_usage'
+          ].map(
+            (key) => (
 
-              <div
-                key={name}
-              >
+              <div key={key}>
 
                 <small>
-                  {name}
+                  {key}
                 </small>
 
                 <strong>
-                  {metrics?.[name] ??
-                    '—'}
+                  {
+                    metrics
+                      ? metrics[key]
+                      : '—'
+                  }
                 </strong>
 
               </div>
@@ -670,26 +652,34 @@ function App() {
 
 
         <p>
-          Metrics are wired into the dashboard.
-          Retrieval benchmark scores should be
+          Metrics are wired into the dashboard;
+          retrieval benchmark scores should be
           populated from a labeled evaluation set.
-          Faithfulness, relevance, and citation
-          accuracy can be upgraded to RAGAS or
-          LLM-as-a-judge for production evaluation.
+          Faithfulness/relevance can be upgraded
+          to RAGAS/LLM-as-a-judge for production
+          evaluation.
         </p>
 
       </section>
 
 
+      {/* =====================================================
+          FOOTER
+          ===================================================== */}
+
       <footer>
-        FastAPI • LangChain • PostgreSQL/pgvector •
-        BM25 • Cross Encoder • Ollama • React
+        FastAPI • LangChain • PostgreSQL/pgvector
+        • BM25 • Cross Encoder • Ollama • React
       </footer>
 
     </main>
   );
 }
 
+
+/* =========================================================
+   REACT ENTRY POINT
+   ========================================================= */
 
 createRoot(
   document.getElementById('root')
